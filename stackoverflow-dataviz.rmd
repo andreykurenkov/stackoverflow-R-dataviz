@@ -1,0 +1,570 @@
+R Exploration of the 2015 StackOverflow Developer Survey by Andrey Kurenkov
+========================================================
+
+```{r global_options, include=FALSE} 
+knitr::opts_chunk$set(fig.width=10, fig.height=10, 
+                      ig.path='./Figs/', echo=FALSE, 
+                      warning=FALSE, message=FALSE)
+```
+
+```{r setup}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gplots)
+library(corrplots)
+
+#png(filename="/home/andreyk/Documents/notwork/16-occ_langB.png",
+#units="px",
+#width=1400,
+#height=1200,
+#pointsize=32,
+#res=72)
+
+theme_set(theme_gray(base_size = 20))
+```
+# Intro to Data
+
+For my exploratory data analysis dataset, I knew I wanted to work with a self-selected dataset that was of interest to me. After some exploration I settled on the [StackOverflow 2015 Developer Survey](http://stackoverflow.com/research/developer-survey-2015), which contains feedback on a range of topics from a whole lot of CS developers all over the world. The StackOverflow blog post already visualized all the obvious information, but I reasoned there are a lot of correlation and other more in depth plots that could still be looked at. 
+
+So, to start with, I needed to write code to load in the data. This was mostly easy thanks to the data being downloadable as a CSV, but there was one annoyance - some of the questions were of the form 'select all that apply', and the answers to them are stored as sequences of columns corresponding to each option which either jave blank values if the choice was not selected or the option if it was selected. It did not make sense to have many variables that were factors with only two possibles possibles (blank or non-blank), so I mutated these columns to have logical values.
+
+```{r Load_the_Data}
+location <- '/home/andreyk/Documents/notwork/udacity/R/stackoverflow.csv'
+#Read from plain CSV, but skip first line that contains 'Up to three' comments
+so_data <- read.csv(location,skip=1)
+
+levels(so_data$Occupation)[match("Developer with a statistics or mathematics background",levels(so_data$Occupation))] <- "Developer with math background"
+
+levels(so_data$Occupation)[match("Business intelligence or data warehousing expert",levels(so_data$Occupation))] <- "Business intelligence/data expert"
+#Change cols with 2-level factors (in Select All that apply/Select up to N questions) to logical cols
+logicCols <- as.integer(sapply(so_data, nlevels))==2
+so_data[, logicCols] <- sapply(so_data[, logicCols], 
+                               function(x) as.logical(as.integer(x)-1))
+
+#Change to ordered for interval questions
+so_data$Age <- ordered(so_data$Age, levels = c("< 20", "20-24", "25-29", 
+                                               "30-34", "35-39" ,"40-50", 
+                                               "51-60", "> 60", 
+                                               "Prefer not to disclose"))
+so_data$Compensation<- ordered(so_data$Compensation, levels = 
+                                 c("Rather not say", "Unemployed", "" , 
+                                   "Less than $20,000","$20,000 - $40,000",
+                                   "$40,000 - $60,000", "$60,000 - $80,000", 
+                                   "$80,000 - $100,000","More than $160,000"))
+so_data$Job.Satisfaction<- ordered(so_data$Job.Satisfaction, levels = 
+                       c("" , "I hate my job" , 
+                         "I'm somewhat dissatisfied with my job" , 
+                         "I'm neither satisfied nor dissatisfied with my job",
+                         "I'm somewhat satisfied with my job",
+                         "I love my job" , 
+                         "Other (please specify)"))
+
+so_data$Experience <- ordered(so_data$Years.IT...Programming.Experience, 
+                          levels = c("","Less than 1 year","1 - 2 years", 
+                                   "2 - 5 years", "6 - 10 years","11+ years"))
+so_data$Years.IT...Programming.Experience <- NULL
+
+so_data$Importance.remote <- 
+  ordered(so_data$How.important.is.remote.when.evaluating.new.job.opportunity.,
+          levels = c("" , "It's non-negotiable","Not important",
+                     "Neutral - I don't mind working in the office or remotely", 
+                     "Somewhat important", "Very important","It's non-negotiable"))
+so_data$How.important.is.remote.when.evaluating.new.job.opportunity. <- NULL
+
+so_data$Caffeinated.drinks <- 
+  ordered(so_data$How.many.caffeinated.beverages.per.day., 
+          levels = c("" , "0","1","2","3","4","5","6","7","8","9","More than 10"))
+so_data$How.many.caffeinated.beverages.per.day. <- NULL
+
+so_data$Hours.hobby.programming <- 
+  ordered(so_data$How.many.hours.programming.as.hobby.per.week., 
+          levels = c(""  , "None",    "1-2 hours per week"  ,   
+                     "2-5 hours per week"  , "5-10 hours per week" ,  
+                     "10-20 hours per week",   "20+ hours per week" ))
+so_data$How.many.hours.programming.as.hobby.per.week. <- NULL
+
+so_data$stackoverflow_frequency <- 
+  ordered(so_data$How.frequently.land.on.or.read.Stack.Overflow, 
+          levels = c(""   , 
+          "I have never been on Stack Overflow. I just love taking surveys.",
+          "Very rarely", "Once a month"  ,"Once a week" ,  "Once a day",
+          "Multiple\xe6times a day" ))
+so_data$How.frequently.land.on.or.read.Stack.Overflow <- NULL
+```
+
+The amount of variables is rather huge at 222, and there is likewise an impressive 26086 observations. It would be unreasonable to explore these many variables with text breakdowns, but it is worthwhile to have a look at all the variables the data contains:
+
+```{r Variable names,message=TRUE}
+#Get factors names from colums without '..' in the name
+factor_names <- names(so_data[,!grepl("..",names(so_data),fixed=TRUE)])
+print(str(so_data[factor_names]))
+
+#Get logical names from columns with '..' in the name
+so_names <- gsub("\\.\\.\\.","-",names(so_data))
+so_names <- gsub("Compensation\\.\\.","Compensation-",so_names)
+
+logic_names <- names(so_data)[grepl("\\.\\.[^.write]",so_names)]
+logic_names <- unique(lapply(strsplit(logic_names,"\\.\\."),function(l) l[1]))
+
+cat("Logic variables (with options):\n")
+
+for(name in logic_names){
+  cat(name)
+  cat("\n    Options: ")
+  col_names <- so_names[grepl(name,so_names,fixed=TRUE)]
+  vals <- lapply(strsplit(col_names,"\\.\\."),function(l) l[2])
+  cat(paste(vals, collapse = ' , '))
+  cat("\n\n")
+}
+```
+# Analysis
+## Gender, Age, and Experience of Developers
+With this many variables, there are many possible pairs of variables to explore. To start simple, we can look at the background of those who answered the survey:
+
+```{r Age and Experience graph}
+age_so_data = subset(age_so_data, Experience!="")
+plot1 <- ggplot(aes(Age,fill=Experience),data=subset(age_so_data,Gender=='Female' | Gender=='Male'))+ 
+         geom_bar() +
+  facet_grid(.~Gender) + 
+  ggtitle("Survey respondents by gender, age, and experience") + 
+  ylab("# survey respondents")
+plot1
+```
+
+As can be seen, both genders have the most people in their 20s, but females in the 20-24 range outnumber 25-29 range, which is not true for males. Another simple thing to explore would be the correlation between years of experience and age.
+
+Predictably, the graph also shows that people with more experience tend to be older,  though even so most respondents of any experience level are younger than 40. We can confirm that the correlation implied by the graph is actually there with a statistical test, which shows a fairly strong correlation of `r with(age_so_data,cor(as.numeric(Age),as.numeric(Experience)))`. A further interesting thing to look at having to do with experience is whether compensation correlates with it:
+
+```{r Experience and Compensation graph}
+ex_so_data <- so_data %>%
+              filter(as.numeric(Compensation)>3) %>%
+              mutate(in.us=ifelse(Country=="United States","US","Outside US"),
+                     in.world="Either") %>%
+              gather(var,where,in.us:in.world)
+
+ex_comp_so_data <- ex_so_data %>%
+     filter(Experience!="") %>%
+     group_by(Experience,where) %>%
+     summarise(mean_comp = mean(as.numeric(Compensation)-3)) %>%
+     arrange(mean_comp) 
+ggplot(aes(x=as.numeric(Experience),y=mean_comp,color = where),
+       data=ex_comp_so_data) +
+  geom_line(stat="identity") +  
+  scale_y_discrete(name="Mean Compensation",breaks=4:9-3, 
+                   labels=levels(ex_so_data$Compensation)[4:9]) +
+  scale_x_continuous(name="Years of Experience",breaks=2:6, 
+                     labels=levels(ex_so_data$Experience)[2:6]) + 
+  ggtitle("Compensation by experience and location")
+```
+
+The predictable trend of having a greater compensation with greater experience can be seen and confirmed numerically as fairly high at `r with(subset(ex_so_data,Experience!=""),cor(as.numeric(Experience),as.numeric(Compensation)))`. The trend seems to be the same both in the US and other countries, but it is clear that compensation is significantly higher in the US on average. Another interesting thing to check about compensation is how hobbyist programming correlates with it:
+
+```{r Hobby Hours and Compensation graph}
+hours_comp_so_data <- ex_so_data %>%
+     filter(Hours.hobby.programming!="") %>%
+     group_by(Hours.hobby.programming,where) %>%
+     summarise(mean_comp = mean(as.numeric(Compensation)-3)) %>%
+     arrange(mean_comp) 
+ggplot(aes(x=as.numeric(Hours.hobby.programming)-1,y=mean_comp,color = where),
+       data=hours_comp_so_data) +
+  geom_line(stat="identity") +  
+  scale_y_discrete(name="Mean Compensation",breaks=4:9-3, 
+                   labels=levels(ex_so_data$Compensation)[4:9]) +
+  scale_x_continuous(name="Hours hobby programming",breaks=1:6, 
+                     labels=levels(ex_so_data$Hours.hobby.programming)[2:7]) + 
+  ggtitle("Compensation by hours hobby programming and location")
+```
+
+Once again, these results make sense - people with greater compensation probably work more, and so have less time to do hobby programming. The correlation is not as strong but as still significant at `r with(subset(ex_so_data,Hours.hobby.programming!="" & Experience!=""),cor(as.numeric(Hours.hobby.programming)-1,as.numeric(Compensation)))`. 
+
+## More Compensation Exploration
+Having looked at how compensation varies based on the background and habbits of the developer, we can also look at compensation breakdowns based on their specialty and nationality. It's clear that compensation is significantly higher in the US, but it may be worthwhile to see what other countries have high compensation rates:
+
+```{r Country compensation graph}
+country_comp_so_data <- ex_so_data %>%
+     filter(Country!="") %>%
+     group_by(Country) %>%
+     summarise(mean_comp = mean(as.numeric(Compensation)-3), count=n()) %>%
+     filter(count>20) %>% 
+     top_n(20,mean_comp) %>% 
+     arrange(mean_comp) 
+
+country_comp_so_data$Country <- factor(country_comp_so_data$Country, 
+                                       levels = country_comp_so_data$Country)
+ggplot(aes(x=Country,y=mean_comp),data=country_comp_so_data) +
+  geom_bar(stat="identity") +  
+  scale_y_discrete(name="Mean Compensation",breaks=4:8-3, 
+                   labels=levels(ex_so_data$Compensation)[4:8],
+                   limits=c(1:4)) + 
+  coord_flip()  + 
+  ggtitle("Top 20 countries by compensation")
+```
+
+The results initially had many countries with compensation averages greater than the United States, but filtering to require at least twenty observations per country resulted in the results being less skewed. It is somewhat surprising that high tech countries such as South Korea and Germany are ranked relatively low in the list, though as could be predicted most of the top ranked countries are in North America and Europe. As a software developer already in the US, the next question that makes sense for me to ask is what industries and occupations correlate with high compensations just in the US:
+
+```{r Industry and Occupurations Compensations Bar}
+#less than 20,000 is numeric 4-9
+ind_comp_data <- ex_so_data %>%
+     filter(Industry!="" & Country=="United States") %>%
+     group_by(Industry) %>%
+     summarise(mean_comp = mean(as.numeric(Compensation)-3),count=n()) %>%
+     filter(count>5) %>%
+     arrange(mean_comp) 
+
+#This preserves the ordering according to mean 
+ind_comp_data$Industry <- factor(ind_comp_data$Industry, 
+                                 levels = ind_comp_data$Industry)
+ggplot(aes(x=Industry,y=mean_comp),data=ind_comp_data)+
+  geom_bar(stat="identity") +
+  scale_y_discrete(name="Mean Compensation",breaks=4:9-3, labels=levels(ex_so_data$Compensation)[4:9],
+                   limits=c(1:4)) +
+  coord_flip() + 
+  ggtitle("Industries ordered by compensation in US")
+
+occ_comp_data <- ex_so_data %>%
+     filter(Occupation!=""  & Country=="United States") %>%
+     group_by(Occupation) %>%
+     summarise(mean_comp = mean(as.numeric(Compensation)-3),count=n()) %>%
+     filter(count>10) %>%
+     arrange(mean_comp) 
+#This preserves the ordering according to mean 
+occ_comp_data$Occupation <- factor(occ_comp_data$Occupation, 
+                                   levels = occ_comp_data$Occupation)
+ggplot(aes(x=Occupation,y=mean_comp),data=occ_comp_data)+
+  geom_bar(stat="identity") +
+  scale_y_discrete(name="Mean Compensation",breaks=4:9-3, labels=levels(ex_so_data$Compensation)[4:9],
+                   limits=c(1:6)) +
+  coord_flip()  + 
+  ggtitle("Occupations ordered by compensation in US")
+```
+
+The only surprising aspect of this graph for me is that 'Data scientist' is ranked so low, since in general the compensation for that field is supposed to be high. Clearly, evaluating these averages based on survey responses is imperfect since people self-classify into these roles and there may be more aspiring Data scientists than those working with that title full time. Still, as this is the data according to a survey of a large number of developers these results are still very valuable and informative. It is possible to further inspect the compensation data by seeing the variance of compensation and the effect of experience on it:
+
+```{r Industry and Occupurations Compensations Box}
+ind_comp_data2 <- ex_so_data %>%
+                  filter(where!="Either" & Industry!="" & 
+                           as.numeric(Experience)>2 & 
+                           Country=="United States" & 
+                           Industry!="Not Currently Employed") %>%
+                  group_by(Industry, Experience) %>%
+                  mutate(num_comp = as.numeric(Compensation)-3)
+#This preserves the ordering according to mean 
+ind_comp_data2$Industry <- ordered(ind_comp_data2$Industry, 
+                                   levels = ind_comp_data$Industry)
+ggplot(aes(x=Industry,y=num_comp,color=Experience),data=ind_comp_data2) +
+  geom_boxplot() +
+  scale_y_discrete(name="Mean Compensation",breaks=4:9-3, labels=levels(ex_so_data$Compensation)[4:9],
+                   limits=c(1:4)) +
+  coord_flip() + 
+  ggtitle("Industries ordered by compensation in US")
+
+
+occ_comp_data2 <- ex_so_data %>%  
+                  filter(where!="Either" & Occupation!="" & 
+                           as.numeric(Experience)>2 & Country=="United States"  & 
+                           Occupation!="Mobile developer - Windows Phone" & 
+                           Occupation!="Growth hacker") %>%
+                  group_by(Occupation, Experience) %>%
+                  mutate(num_comp = as.numeric(Compensation)-3)
+#This preserves the ordering according to mean 
+occ_comp_data2$Occupation <- ordered(occ_comp_data2$Occupation, levels = occ_comp_data$Occupation)
+
+ggplot(aes(x=Occupation,y=num_comp,color=Experience),data=occ_comp_data2)+
+  geom_boxplot() +
+  scale_y_discrete(name="Mean Compensation",breaks=4:9-3, labels=levels(ex_so_data$Compensation)[4:9],
+                   limits=c(1:6)) +
+  coord_flip()  + 
+  ggtitle("Occupations ordered by compensation in US")
+```
+
+These visualizations are comprehensible, but it seems possible to do better by displaying the data as a combination of translucent points and boxplots:
+
+```{r Industry and Occupurations Compensations Point and Box}
+ggplot(aes(x=Industry,y=num_comp),data=ind_comp_data2)+
+  geom_boxplot(alpha=0.25,outlier.size = 0) +
+  geom_point(aes(color=Experience),alpha=0.5,
+             position=position_jitter(width=0.5)) +
+  scale_y_discrete(name="Mean Compensation",breaks=4:9-3, labels=levels(ex_so_data$Compensation)[4:9],
+                   limits=c(1:6)) +
+  coord_flip() + 
+  ggtitle("Industries ordered by compensation in US")
+
+plot2 <- ggplot(aes(x=Occupation,y=num_comp),data=occ_comp_data2)+
+  geom_boxplot(alpha=0.25,outlier.size = 0) +
+  geom_point(aes(color=Experience),
+             alpha=0.5,
+             position=position_jitter(width=0.5)) +
+  scale_y_discrete(name="Compensation",breaks=4:9-3, labels=levels(ex_so_data$Compensation)[4:9],
+                   limits=c(1:6)) +
+  coord_flip()  + 
+  ggtitle("Occupations ordered by compensation in US")
+plot2
+```
+
+The above graphs really confirm all the information we have seen through other graphs before, but very nicely combines all that infromation. Having seen all this information about compensation based on industry and occupation, it is natural to also ask which industries are most likely to have jobs for each of the occupations. Given the large number of industries and occupations this will once again lead to an information-dense visualization, but displaying it as a heatmap keeps the result very clear:
+
+```{r Industry and Occupurations Heatmap}
+oc_so_data <- so_data %>%
+     select(Occupation,Industry) %>% 
+     filter(Occupation!="" & Industry!="" & 
+              Industry!="Not Currently Employed") %>%
+     group_by(Occupation,Industry) %>%
+     summarise(n= n()) %>%
+     ungroup() %>%
+     spread(Industry, n) %>%
+     mutate_each(funs(replace(., which(is.na(.)), 0)))
+
+rownames(oc_so_data) <- oc_so_data$Occupation
+oc_so_data$Occupation <- NULL
+
+lm <-rbind(c(0,3),c(4,1),c(2,1))
+lh <- c(0.5,1,3)
+lw <- c(1,4)
+draw_heatmap <- function(data,xlab="",ylab="",scale="none",title="",margins=c(10,12)){
+  heatmap.2(data.matrix(data),scale=scale,Colv=NA,Rowv=NA, 
+          xlab=xlab, ylab=ylab,
+          main=title,
+          margins=margins, trace="none", 
+          lmat=lm,lhei=lh,lwid=lw)
+}
+draw_heatmap(oc_so_data,scale='none', 
+          xlab="Industry", ylab="Occupation",
+          title="Occupation x Industry")
+```
+
+The result is somewhat underwhelming since the 'full-stack web developer occupation' and the 'Software Products industry' have by the highest counts. One way to see more interesting information in the heatmap is to scale the color per row instead of the whole matrix, to see the industry breakdowns for each occupation:
+
+```{r Industry and Occupurations Heatmap Row}
+draw_heatmap(oc_so_data,scale='row',
+             title="Occupation x Industry (scaled per row)", 
+             xlab="Industry", ylab="Occupation")
+```
+
+This shows more, but the generic 'Software Products' industry still dominates each row, so it is worthwhile to have a look at the results without this industry:
+
+```{r Industry and Occupurations Heatmap 2}
+oc_so_data2 <- oc_so_data %>%
+  select(-(`Software Products`))
+
+rownames(oc_so_data2) <- rownames(oc_so_data)
+oc_so_data2$Occupation <- NULL
+draw_heatmap(oc_so_data2,scale='row',
+             title="Occupation x Industry (scaled per row)", 
+             xlab="Industry", ylab="Occupation")
+```
+
+Interestingly, the 'Data Scientist' occupation does not strongly fit into any industry and has most entries in the 'other' category, which is also true of embedded and machine learning developers. Overall however, the correlation here are very sensible.
+
+## Occupation Languages
+As a software developer, I find all this exploration of occupations and industries quite fun, and naturally look to also inspect what languages developers out there use for different things. Since each survey responder could pick multiple languages this is somewhat more difficult to process for visualization, but 25 lines of R suffice for the task:
+
+```{r Langs Heatmap}
+occupation_lang_data <- so_data %>% 
+                         select(starts_with("Current"),
+                                -Current.Lang...Tech..Write.In,
+                                Occupation) %>%
+                         filter(Occupation!="") %>%
+                        group_by(Occupation) %>%
+                        mutate_each(funs(as.numeric)) %>%
+                        summarise_each(funs(sum)) 
+langs_names <- colnames(select(occupation_lang_data,-Occupation))
+langs_names_clean <- lapply(strsplit(langs_names,"ch..",fixed=TRUE),function(l) l[2])
+colnames(occupation_lang_data)<-c("Occupation",langs_names_clean)
+
+top_langs <- occupation_lang_data %>% 
+             select(-Occupation) %>% 
+             summarise_each(funs(sum)) %>%
+             gather(lang,count,1:42) %>%
+             top_n(24,count) %>%
+             arrange(count) 
+top_langs <- t(top_langs)[1,]
+
+top_occ_lang_data <- occupation_lang_data[,c('Occupation',top_langs)]
+top_occ_lang_data$total <- rowSums(select(top_occ_lang_data,-Occupation))
+top_occ_lang_data <- arrange(top_occ_lang_data,total)
+rownames(top_occ_lang_data) <- top_occ_lang_data$Occupation
+top_occ_lang_data$Occupation <- NULL
+top_occ_lang_data$total <- NULL
+
+draw_heatmap(top_occ_lang_data,scale='none',
+             title="Occupation x Language", 
+             xlab="Language", ylab="Occupation",
+             margins=c(6,10))
+```
+
+The results are quite underwhelming due to there being so many more web developers than people in other occupations, and so it is worthwhile to look at the graph without that occupation as well:
+
+```{r Langs Heatmap 2}
+top_occ_lang_data2 <-top_occ_lang_data[-nrow(top_occ_lang_data),]
+rownames(top_occ_lang_data2) <- 
+  rownames(top_occ_lang_data)[-nrow(top_occ_lang_data)]
+draw_heatmap(top_occ_lang_data2,scale='none',
+            title="Occupation x Language Heatmap", 
+            xlab="Language", ylab="Occupation",
+            margins=c(6,10))
+```
+
+These results are somewhat more interseting, but still fairly dominated by only a few occupations, so we can again look at the data with scaling per row instead of over the whole matrix:
+
+```{r Langs Heatmap 3}
+draw_heatmap(top_occ_lang_data,scale='row',
+             title="Occupation x Language (scaled per row)", 
+             xlab="Language", ylab="Occupation")
+```
+
+Interestingly, unlike with occupations there does not seem to be a few languages that are very dominant in terms of usage over all the others. Otherwise, as could be predicted languages like Javascript, SQL, Java, and Python are the ones most often used by developers. Just for fun, we can also visualize the same heatmaps using the corrplot package:
+
+```{r Langs corrplots}
+
+#corrplot does not position the title correctly so annothing manual correction is needed
+top_occ_lang_data <- top_occ_lang_data[nrow(top_occ_lang_data):1,ncol(top_occ_lang_data):1]
+
+draw_corr_heatmap <- function(data,title=""){
+  corrplot(data.matrix(data),method='color',is.corr=FALSE)
+  par(mar=c(1,14,6,1)+0.2)
+  title(outer=FALSE,adj=0,
+        main = list(title, cex=1.25,col="black", font=2)) 
+}
+
+draw_corr_heatmap(top_occ_lang_data,"Occupation x Language")
+top_occ_lang_data_norm <- top_occ_lang_data/sum(top_occ_lang_data)
+
+
+draw_corr_heatmap(top_occ_lang_data_norm,"Occupation x Language (normalized)")
+
+top_occ_lang_data_norm_row <- t(apply(top_occ_lang_data,1,function(x)(x)/(sum(x))))
+draw_corr_heatmap(top_occ_lang_data_norm_row,"Occupation x Language (scaled per row)")
+```
+
+## Specific Occupation Information
+Lastly, since I am doing this for a data science course it would be interesting to have a closer look at what languages data scientists in particular use. A bar graph showing only the top ten languages would show the ratio of languages used much more clearly:
+
+```{r Data Science Langs}
+top_occ_lang_counts <-  occupation_lang_data %>% 
+                        gather(language,count,2:43) %>% 
+                        select(Occupation,language,count) %>%
+                        group_by(Occupation) %>%
+                        top_n(10,count)
+
+ggplot(aes(x=reorder(language,count),y=count),
+       data=filter(top_occ_lang_counts,
+                   Occupation=="Data scientist")) +
+  geom_bar(stat="identity") +
+  coord_flip() 
+```
+
+Python and R are victorious! An interesting comparison to make is to see the same language breakdown for machine learning developers:
+
+```{r ML Langs}
+ggplot(aes(x=reorder(language,count),y=count),
+       data=filter(top_occ_lang_counts,
+                   Occupation=="Machine learning developer")) +
+  geom_bar(stat="identity") +
+  coord_flip() 
+```
+
+The spread of languages is less skewed and involves fewer specialized languages, but predictabley is also topped by python. In addition to finding the top languages for these particular occupations, it is also interesting to find the top occupations for the language all this is being done in - R:
+
+```{r R Occupations}
+r_so_data <- so_data %>%
+             filter(Occupation!="" & Current.Lang...Tech..R==TRUE) %>%
+             group_by(Occupation) %>%
+             summarize(count=n()) %>%
+             top_n(10,count)
+
+ggplot(aes(x=reorder(Occupation,count),y=count),data=r_so_data) +
+  geom_bar(stat="identity") +
+  coord_flip()
+```
+
+Unsuprisingly, data scientists and machine learning/statistics developers use R most, though it is surprising full-stack web developers also use it a lot. To finish up, we can look at the sorts of training that data scientists undergo to do their job:
+
+```{r Training Graphs}
+occupation_training_data <- so_data %>% 
+                        select(starts_with("Training"),Occupation) %>%
+                        filter(Occupation!="") %>%
+                        group_by(Occupation) %>%
+                        mutate_each(funs(as.numeric)) %>%
+                        summarise_each(funs(sum))
+
+training <- gsub("."," ",lapply(strsplit(colnames(select(occupation_training_data,starts_with("Training"))),"on..",fixed=TRUE),function(l) l[2]),fixed=TRUE)
+colnames(occupation_training_data) <- c("Occupation",training)
+
+occupation_training_data_long <- gather(occupation_training_data,Training,Count,2:12)
+
+occupation_training_data_wide <- select(occupation_training_data,-Occupation)
+rownames(occupation_training_data_wide) <- occupation_training_data$Occupation
+
+draw_heatmap(occupation_training_data_wide,scale='none',
+             title="Occupation x Training (scaled per row)", 
+             xlab="Training", ylab="Occupation",margins=c(16,16))
+
+ggplot(aes(x=reorder(Training,Count),y=Count),
+       data=filter(occupation_training_data_long,Occupation=="Data scientist" | Occupation=="Machine learning developer")) +
+  geom_bar(stat="identity") +
+  coord_flip() + 
+  facet_grid(~Occupation) + 
+  ggtitle("Training types by occupation") + 
+  xlab("# respondents with training type")
+```
+
+Perhaps uniquely among the different occupations, the top ranked training type is 'no formal traning'. This may reflect the fact that many data scientists have a science or engineering background and found their way to working with professional data science without being educated in that formally. In contrast, machine learning developers most often have had formal education with at least a masters or a bachelors degree.
+
+```{r Occupation Facet Full}
+ggplot(aes(x=reorder(Training,Count),y=Count),
+       data=occupation_training_data_long) +
+  facet_wrap(~Occupation) +
+  geom_bar(stat="identity") +
+  coord_flip() + 
+  ggtitle("Training types by occupation") + 
+  xlab("# respondents with training type")
+```
+# Final Plots and Summary
+## Plot 1
+```{r Final Plots}
+plot1 + ggtitle("Survey respondents by age and experience") + 
+  ylab("# survey responders") 
+```
+
+
+This plot was chosen for this section because I think it does a great job of conveying two aspects of the data at once - the numbers of repondents of each age and the correlation between experience and age (which is strongly positive at `r with(age_so_data,cor(as.numeric(Age),as.numeric(Experience)))`). Though the results are largely predictable, it seemed important to do this sort of visualization early on since this data is based on survey respondets and so any trends found will necessarily be biased by the types of people who chose to respond to the survey. One thing that is not as clear due to the way this data is visualized is the breakdown of experience regardless of age and vice versa, but that is easy to look at with a numerical summary of the variables:
+```{r Final Plots 1 Summary}
+summary(select(age_so_data,Age,Experience),maxsum=10)
+```
+
+In this case, it is clear that the largest number of respondents are people are in their 20s and with 2-5 years of experience. This makes total sense to me, as I think developers in my age range are very accustomed to using StackOverflow and are otherwise likely to have seen a link to the survey through reddit or Hacker News. There is also the suggestion that there are likely some false responses, since there exist some people who are not yet 20 but have 11 or more years of experience. Personally I found it interesting to see that there are developers past their 40s with less than 10 years of experience, which shows that it is possible to become a developer even at a later age. 
+
+
+## Plot 2
+```{r Final Plots 2}
+plot2 + ggtitle("Compensation by Occupation and Experience") + 
+  ylab("Compensation Level") 
+```
+
+This plot was chosen for the final section because it is awesome! Or, to be more specific, it is the results of several iterations of different visualization of the correlation between occupation, experience, and compensation. It took me those several iterations to think to use colored points with boxplots, and though using several individual boxplots worked well enough I think this form of visualization with jittering of the points led to a much more appealing and intuitively clear plot in my opinion. 
+
+The X axis shows the numeric labels for the different compensation levels, so as a follow up on the plot we can look at a summary of the numeric form of the factor:
+```{r Final Plots 2 Summary}
+summary(as.numeric(occ_comp_data2$Compensation)-3,maxsum=10)
+```
+
+The visualization shows both predictable things, such as that executives make the most of any other occupation and that people with more experience tend to make more, and interesting aspects from the data, such as that full-stack web developers highly outnumber other occupations among the respondents to the survey and that almost every occupation has respondents that make very little money. A lot of information is packed into this graph, but I think this way of displaying it keeps all the information legible. Personally I was very surprised that data scientists ranked so low, suggesting perhaps that many people are accepting lower-payed data science positions.
+
+## Plot 3
+```{r Final Plots 3}
+draw_heatmap(top_occ_lang_data,scale='row',
+             title="Occupation x Language Heatmap (scaled per row)", 
+             xlab="Language", ylab="Occupation")
+```
+
+As with the second plot, this plot is chosen because I think it is a great visualization of a lot of data and of interest to the people who responded to the survey in the first place. Scaling the heatmap per row is technically not correct, but makes it possible to see the language usage breakdown for each occupation. This is particularly useful to suggest to developers what languages they may want to explore based on their interests, since StackOverflow is as big as it is because having a community of developers that can answers programming questions from their own experience has proven to be invaluable. 
+
+The most surprising result is the large amount of LAMP users, and the large numbers of users of Visual Basic, but overall the correlation of language to occupation is very logical. The languages are ordered according to the total number of users but the actual numbers are not clear in the heat map, so it would be useful to also look at the row totals:
+
+```{r Final Plots 3 Summary, echo=FALSE, warning=FALSE,fig.width = 10, fig.height = 9}
+rowSums(top_occ_lang_data)
+```
+
+# Reflection
+The StackOverflow 2015 developer survey is a fairly large dataset with at 26086 observations and 222 variables, and provided a wealth of opportunities for this project. I did encounter some difficulties due to all the variables being discrete, which limited the types of plots I could make use of considerabely, and due to there being survey questions which allowed respondents to choose one or more options leading to many columns that were hard to visualize. Additionally, almost all the questions were optional so I had to be careful to filter out null values in almost all my plots. In addressing these challenges I had success with focusing on high density visualizations, such as colored points combined with boxplots and heatmaps, and by using intermediate dataframes when appropriate. The choice to largely focus on cross correlations of two or three variables is one that I think led to high quality visualizations that were more interesting than results I could have gotten with univariate analysis. In the future, confirming these survey results with more formal economic measures of average salaries for different occupations and industries.
