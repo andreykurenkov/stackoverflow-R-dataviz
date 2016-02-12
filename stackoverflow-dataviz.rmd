@@ -12,7 +12,7 @@ library(ggplot2)
 library(dplyr)
 library(tidyr)
 library(gplots)
-library(corrplots)
+library(corrplot)
 
 #png(filename="/home/andreyk/Documents/notwork/16-occ_langB.png",
 #units="px",
@@ -21,7 +21,8 @@ library(corrplots)
 #pointsize=32,
 #res=72)
 
-theme_set(theme_gray(base_size = 20))
+theme_set(theme_gray(base_size = 18))
+theme_update(axis.text.x= element_text(angle= 15))
 ```
 # Intro to Data
 
@@ -123,8 +124,8 @@ for(name in logic_names){
 With this many variables, there are many possible pairs of variables to explore. To start simple, we can look at the background of those who answered the survey:
 
 ```{r Age and Experience graph}
-age_so_data = subset(age_so_data, Experience!="")
-plot1 <- ggplot(aes(Age,fill=Experience),data=subset(age_so_data,Gender=='Female' | Gender=='Male'))+ 
+age_so_data = filter(so_data, Experience!="" & Age!="Prefer not to disclose" & (Gender=='Female' | Gender=='Male'))
+plot1 <- ggplot(aes(Age,fill=Experience),data=age_so_data)+ 
          geom_bar() +
   facet_grid(.~Gender) + 
   ggtitle("Survey respondents by gender, age, and experience") + 
@@ -170,20 +171,62 @@ ggplot(aes(x=as.numeric(Hours.hobby.programming)-1,y=mean_comp,color = where),
        data=hours_comp_so_data) +
   geom_line(stat="identity") +  
   scale_y_discrete(name="Mean Compensation",breaks=4:9-3, 
-                   labels=levels(ex_so_data$Compensation)[4:9]) +
+                   labels=levels(ex_so_data$Compensation)[4:9],
+                   limits=c(1:4)) +
   scale_x_continuous(name="Hours hobby programming",breaks=1:6, 
                      labels=levels(ex_so_data$Hours.hobby.programming)[2:7]) + 
-  ggtitle("Compensation by hours hobby programming and location")
+  ggtitle("Compensation by hours hobby programming and location") + 
+  theme(axis.text.x= element_text(angle= 20))
 ```
 
-Once again, these results make sense - people with greater compensation probably work more, and so have less time to do hobby programming. The correlation is not as strong but as still significant at `r with(subset(ex_so_data,Hours.hobby.programming!="" & Experience!=""),cor(as.numeric(Hours.hobby.programming)-1,as.numeric(Compensation)))`. 
+Once again, these results make sense - people with greater compensation probably work more, and so have less time to do hobby programming. The correlation is not as strong but as still significant at `r with(subset(ex_so_data,Hours.hobby.programming!="" & Experience!=""),cor(as.numeric(Hours.hobby.programming)-1,as.numeric(Compensation)))`. Hopefully, those who do get payed more indeed enjoy their job more and so do not need to do hobby programming. In fact, we can go ahead and check this out as well:
+
+```{r Compensation and Job Satisfaction line}
+comp_sat_so_data <- ex_so_data %>%
+     filter(Job.Satisfaction!="" & Job.Satisfaction!="Other (please specify)") %>%
+     group_by(Job.Satisfaction,where) %>%
+     summarise(mean_comp = mean(as.numeric(Compensation)-3)) %>%
+     arrange(mean_comp) 
+ggplot(aes(x=as.numeric(Job.Satisfaction)-1,y=mean_comp,color = where),
+       data=comp_sat_so_data) +
+  geom_line(stat="identity") +  
+  scale_y_discrete(name="Mean Compensation",breaks=4:9-3, 
+                   labels=levels(ex_so_data$Compensation)[4:9],
+                   limits=c(1:4)) +
+  scale_x_continuous(name="Job Satisfaction",breaks=1:5, 
+                     labels=levels(comp_sat_so_data$Job.Satisfaction)[2:6]) + 
+  ggtitle("Compensation vs Job Satisfaction") + 
+  theme(axis.text.x= element_text(angle= 15))
+```
+
+All these line graphs are fun, but not very efficient, so using R magic we can make a graph that communicates quite a bit more about the variables we have been exploring thus far:
+
+```{r Compensation and Job Satisfaction point and box}
+comp_sat_so_data2 <- ex_so_data %>%
+     filter(Job.Satisfaction!="" & Job.Satisfaction!="Other (please specify)" & Experience!="") %>%
+    group_by(Job.Satisfaction, Experience) %>%
+    mutate(num_comp = as.numeric(Compensation)-3) %>%
+    ungroup()
+    
+ggplot(aes(x=Job.Satisfaction,y=num_comp),data=comp_sat_so_data2) +
+  geom_boxplot(alpha=0.25,outlier.size = 0) +
+  geom_point(aes(color=Experience),
+             alpha=0.3,
+             position=position_jitter(width=0.75)) +
+  facet_grid(where~.) + 
+  scale_y_discrete(name="Compensation",breaks=4:9-3, labels=levels(ex_so_data$Compensation)[4:9],
+                   limits=c(1:6)) +
+  coord_flip()  + 
+  ggtitle("Job Satisfaction vs Compensation ") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1)))
+```
 
 ## More Compensation Exploration
 Having looked at how compensation varies based on the background and habbits of the developer, we can also look at compensation breakdowns based on their specialty and nationality. It's clear that compensation is significantly higher in the US, but it may be worthwhile to see what other countries have high compensation rates:
 
 ```{r Country compensation graph}
 country_comp_so_data <- ex_so_data %>%
-     filter(Country!="") %>%
+     filter(Country!="" & Country!="N/A" ) %>%
      group_by(Country) %>%
      summarise(mean_comp = mean(as.numeric(Compensation)-3), count=n()) %>%
      filter(count>20) %>% 
@@ -192,21 +235,47 @@ country_comp_so_data <- ex_so_data %>%
 
 country_comp_so_data$Country <- factor(country_comp_so_data$Country, 
                                        levels = country_comp_so_data$Country)
-ggplot(aes(x=Country,y=mean_comp),data=country_comp_so_data) +
+ggplot(aes(x=Country,y=mean_comp,fill=count),data=country_comp_so_data) +
   geom_bar(stat="identity") +  
   scale_y_discrete(name="Mean Compensation",breaks=4:8-3, 
                    labels=levels(ex_so_data$Compensation)[4:8],
                    limits=c(1:4)) + 
+  scale_fill_gradient(trans = "log",breaks=c(50,100,250,500,1000,2500)) + 
   coord_flip()  + 
   ggtitle("Top 20 countries by compensation")
 ```
 
-The results initially had many countries with compensation averages greater than the United States, but filtering to require at least twenty observations per country resulted in the results being less skewed. It is somewhat surprising that high tech countries such as South Korea and Germany are ranked relatively low in the list, though as could be predicted most of the top ranked countries are in North America and Europe. As a software developer already in the US, the next question that makes sense for me to ask is what industries and occupations correlate with high compensations just in the US:
+The results initially had many countries with compensation averages greater than the United States, but filtering to require at least twenty observations per country resulted in the results being less skewed. It is somewhat surprising that high tech countries such as South Korea and Germany are ranked relatively low in the list, though as could be predicted most of the top ranked countries are in North America and Europe. 
+
+Of course, money is not everything, so the flip side is once again to look at job satisfaction:
+
+```{r Country satisfaction graph}
+country_sat_so_data <- so_data %>%
+     filter(Country!="" & Country!="N/A" & Job.Satisfaction!="" & Job.Satisfaction!="Other (please specify)") %>%
+     group_by(Country) %>%
+     summarise(mean_sat = mean(as.numeric(Job.Satisfaction)-1), count=n()) %>%
+     filter(count>20) %>% 
+     top_n(20,mean_sat) %>% 
+     arrange(mean_sat) 
+
+country_sat_so_data$Country <- factor(country_sat_so_data$Country, 
+                                       levels = country_sat_so_data$Country)
+ggplot(aes(x=Country,y=mean_sat,fill=count),data=country_sat_so_data) +
+  geom_bar(stat="identity") +  
+  scale_y_discrete(name="Mean Job Satisfaction",breaks=1:5, 
+                   labels=levels(so_data$Job.Satisfaction)[2:6],
+                   limits=c(1:5)) + 
+  scale_fill_gradient(trans = "log",breaks=c(50,100,250,500,1000,2500)) +
+  coord_flip()  + 
+  ggtitle("Top 20 countries by job satisfaction")
+```
+
+As a software developer already in the US, the next question that makes sense for me to ask is what industries and occupations correlate with high compensations just in the US:
 
 ```{r Industry and Occupurations Compensations Bar}
 #less than 20,000 is numeric 4-9
 ind_comp_data <- ex_so_data %>%
-     filter(Industry!="" & Country=="United States") %>%
+     filter(Industry!="" & Country=="United States" & Industry!="other (pleace specify)") %>%
      group_by(Industry) %>%
      summarise(mean_comp = mean(as.numeric(Compensation)-3),count=n()) %>%
      filter(count>5) %>%
@@ -215,10 +284,11 @@ ind_comp_data <- ex_so_data %>%
 #This preserves the ordering according to mean 
 ind_comp_data$Industry <- factor(ind_comp_data$Industry, 
                                  levels = ind_comp_data$Industry)
-ggplot(aes(x=Industry,y=mean_comp),data=ind_comp_data)+
+ggplot(aes(x=Industry,y=mean_comp,fill=count),data=ind_comp_data)+
   geom_bar(stat="identity") +
   scale_y_discrete(name="Mean Compensation",breaks=4:9-3, labels=levels(ex_so_data$Compensation)[4:9],
                    limits=c(1:4)) +
+  scale_fill_gradient(trans = "log",breaks=c(50,100,250,500)) +
   coord_flip() + 
   ggtitle("Industries ordered by compensation in US")
 
@@ -231,15 +301,56 @@ occ_comp_data <- ex_so_data %>%
 #This preserves the ordering according to mean 
 occ_comp_data$Occupation <- factor(occ_comp_data$Occupation, 
                                    levels = occ_comp_data$Occupation)
-ggplot(aes(x=Occupation,y=mean_comp),data=occ_comp_data)+
+ggplot(aes(x=Occupation,y=mean_comp,fill=count),data=occ_comp_data)+
   geom_bar(stat="identity") +
   scale_y_discrete(name="Mean Compensation",breaks=4:9-3, labels=levels(ex_so_data$Compensation)[4:9],
                    limits=c(1:6)) +
+  scale_fill_gradient(trans = "log",breaks=c(25,50,100,250,500,1000)) +
   coord_flip()  + 
   ggtitle("Occupations ordered by compensation in US")
 ```
 
-The only surprising aspect of this graph for me is that 'Data scientist' is ranked so low, since in general the compensation for that field is supposed to be high. Clearly, evaluating these averages based on survey responses is imperfect since people self-classify into these roles and there may be more aspiring Data scientists than those working with that title full time. Still, as this is the data according to a survey of a large number of developers these results are still very valuable and informative. It is possible to further inspect the compensation data by seeing the variance of compensation and the effect of experience on it:
+The only surprising aspect of this graph for me is that 'Data scientist' is ranked so low, since in general the compensation for that field is supposed to be high. Clearly, evaluating these averages based on survey responses is imperfect since people self-classify into these roles and there may be more aspiring Data scientists than those working with that title full time. Still, as this is the data according to a survey of a large number of developers these results are still very valuable and informative.
+
+```{r Industry and Occupurations Sat Bar}
+ind_sat_data <- ex_so_data %>%
+     filter(Job.Satisfaction!=""  & Country=="United States") %>%
+     group_by(Industry) %>%
+     summarise(mean_sat = mean(as.numeric(Job.Satisfaction)-1),count=n()) %>%
+     filter(count>10) %>%
+     arrange(mean_sat) 
+#This preserves the ordering according to mean 
+ind_sat_data$Industry <- factor(ind_sat_data$Industry, 
+                                   levels = ind_sat_data$Industry)
+ggplot(aes(x=Industry,y=mean_sat,fill=count),data=ind_sat_data)+
+  geom_bar(stat="identity") +
+  scale_y_discrete(name="Mean Job Satisfaction",breaks=1:5, 
+                   labels=levels(so_data$Job.Satisfaction)[2:6],
+                   limits=c(1:5)) +
+  scale_fill_gradient(trans = "log",breaks=c(50,100,250,500)) +
+  coord_flip()  + 
+  ggtitle("Industries ordered by satisfaction in US")
+
+occ_sat_data <- ex_so_data %>%
+     filter(Job.Satisfaction!=""  & Country=="United States" & Occupation!="") %>%
+     group_by(Occupation) %>%
+     summarise(mean_sat = mean(as.numeric(Job.Satisfaction)-1),count=n()) %>%
+     filter(count>10) %>%
+     arrange(mean_sat) 
+#This preserves the ordering according to mean 
+occ_sat_data$Occupation <- factor(occ_sat_data$Occupation, 
+                                   levels = occ_sat_data$Occupation)
+ggplot(aes(x=Occupation,y=mean_sat,fill=count),data=occ_sat_data)+
+  geom_bar(stat="identity") +
+  scale_y_discrete(name="Mean Job Satisfaction",breaks=1:5, 
+                   labels=levels(so_data$Job.Satisfaction)[2:6],
+                   limits=c(1:5)) +
+  scale_fill_gradient(trans = "log",breaks=c(25,50,100,250,500,1000)) +
+  coord_flip()  + 
+  ggtitle("Occupations ordered by satisfaction in US")
+```
+
+It is possible to further inspect the compensation data by seeing the variance of compensation and the effect of experience on it:
 
 ```{r Industry and Occupurations Compensations Box}
 ind_comp_data2 <- ex_so_data %>%
@@ -388,8 +499,8 @@ top_occ_lang_data$Occupation <- NULL
 top_occ_lang_data$total <- NULL
 
 draw_heatmap(top_occ_lang_data,scale='none',
-             title="Occupation x Language", 
-             xlab="Language", ylab="Occupation",
+             title="Occupation x Technology", 
+             xlab="Technology", ylab="Occupation",
              margins=c(6,10))
 ```
 
@@ -400,8 +511,8 @@ top_occ_lang_data2 <-top_occ_lang_data[-nrow(top_occ_lang_data),]
 rownames(top_occ_lang_data2) <- 
   rownames(top_occ_lang_data)[-nrow(top_occ_lang_data)]
 draw_heatmap(top_occ_lang_data2,scale='none',
-            title="Occupation x Language Heatmap", 
-            xlab="Language", ylab="Occupation",
+            title="Occupation x Technology", 
+            xlab="Technology", ylab="Occupation",
             margins=c(6,10))
 ```
 
@@ -409,7 +520,7 @@ These results are somewhat more interseting, but still fairly dominated by only 
 
 ```{r Langs Heatmap 3}
 draw_heatmap(top_occ_lang_data,scale='row',
-             title="Occupation x Language (scaled per row)", 
+             title="Occupation x Technology (scaled per row)", 
              xlab="Language", ylab="Occupation")
 ```
 
@@ -421,20 +532,19 @@ Interestingly, unlike with occupations there does not seem to be a few languages
 top_occ_lang_data <- top_occ_lang_data[nrow(top_occ_lang_data):1,ncol(top_occ_lang_data):1]
 
 draw_corr_heatmap <- function(data,title=""){
-  corrplot(data.matrix(data),method='color',is.corr=FALSE)
+  corrplot(data.matrix(data),method='color',is.corr=FALSE,tl.col="black")
   par(mar=c(1,14,6,1)+0.2)
   title(outer=FALSE,adj=0,
         main = list(title, cex=1.25,col="black", font=2)) 
 }
 
-draw_corr_heatmap(top_occ_lang_data,"Occupation x Language")
+draw_corr_heatmap(top_occ_lang_data,"Occupation x Technology")
 top_occ_lang_data_norm <- top_occ_lang_data/sum(top_occ_lang_data)
 
-
-draw_corr_heatmap(top_occ_lang_data_norm,"Occupation x Language (normalized)")
+draw_corr_heatmap(top_occ_lang_data_norm,"Occupation x Technology (normalized)")
 
 top_occ_lang_data_norm_row <- t(apply(top_occ_lang_data,1,function(x)(x)/(sum(x))))
-draw_corr_heatmap(top_occ_lang_data_norm_row,"Occupation x Language (scaled per row)")
+draw_corr_heatmap(top_occ_lang_data_norm_row,"Occupation x Technology (scaled per row)")
 ```
 
 ## Specific Occupation Information
